@@ -682,8 +682,8 @@ router.post('/import', validateAvatarUrlMiddleware, function (request, response)
 
     const format = request.body.file_type;
     const avatarUrl = (request.body.avatar_url).replace('.png', '');
-    const characterName = request.body.character_name;
-    const userName = request.body.user_name || 'User';
+    const characterName = sanitize(request.body.character_name) || 'Character';
+    const userName = sanitize(request.body.user_name) || 'User';
     const fileNames = [];
 
     if (!request.file) {

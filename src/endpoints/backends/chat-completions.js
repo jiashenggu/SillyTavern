@@ -246,8 +246,8 @@ async function sendClaudeRequest(request, response) {
             top_k: request.body.top_k,
             stream: request.body.stream,
         };
-        if (useSystemPrompt) {
-            if (enableSystemPromptCache && Array.isArray(convertedPrompt.systemPrompt) && convertedPrompt.systemPrompt.length) {
+        if (useSystemPrompt && Array.isArray(convertedPrompt.systemPrompt) && convertedPrompt.systemPrompt.length) {
+            if (enableSystemPromptCache) {
                 convertedPrompt.systemPrompt[convertedPrompt.systemPrompt.length - 1].cache_control = { type: 'ephemeral', ttl: cacheTTL };
             }
 
@@ -2025,6 +2025,17 @@ router.post('/generate', async function (request, response) {
 
         if (request.body.json_schema?.value) {
             request.body.json_schema.value = flattenSchema(request.body.json_schema.value, request.body.chat_completion_source);
+        }
+
+        // Filter out system messages with empty or whitespace-only content
+        // to prevent API errors (e.g. Anthropic requires non-empty text content blocks)
+        if (Array.isArray(request.body.messages)) {
+            request.body.messages = request.body.messages.filter(msg => {
+                if (msg.role === 'system' && typeof msg.content === 'string') {
+                    return msg.content.trim().length > 0;
+                }
+                return true;
+            });
         }
 
         switch (request.body.chat_completion_source) {

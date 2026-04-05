@@ -215,6 +215,10 @@ export function convertClaudeMessages(messages, prefillString, useSysPrompt, use
                     messages[i].content = `${names.charName}: ${messages[i].content}`;
                 }
             }
+            // Skip system messages with empty or whitespace-only content
+            if (!messages[i].content || !messages[i].content.trim()) {
+                continue;
+            }
             systemPrompt.push({ type: 'text', text: messages[i].content });
         }
 

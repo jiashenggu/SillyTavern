@@ -58,12 +58,32 @@ export function segmentTextInElement(htmlElement, htmlContent, granularity = 'wo
 }
 
 /**
- * Apply stream fade-in effect to the given message text element by morphing its content.
- * @param {HTMLElement} messageTextElement Message text element
- * @param {string} htmlContent New HTML content to apply
+ * morphdom options that preserve user-toggled details open state during streaming.
+ * @type {object}
  */
+const morphdomDetailsOptions = {
+    onBeforeElUpdated: function(fromEl, toEl) {
+        if (fromEl instanceof HTMLDetailsElement && fromEl.open && !toEl.hasAttribute('open')) {
+            toEl.setAttribute('open', '');
+        }
+        return true;
+    },
+};
+
 export function applyStreamFadeIn(messageTextElement, htmlContent) {
     const targetElement = /** @type {HTMLElement} */ (messageTextElement.cloneNode());
     segmentTextInElement(targetElement, htmlContent);
-    morphdom(messageTextElement, targetElement);
+    morphdom(messageTextElement, targetElement, morphdomDetailsOptions);
+}
+
+/**
+ * Apply HTML content via morphdom without text segmentation.
+ * Preserves existing DOM elements and their state (e.g. details open).
+ * @param {HTMLElement} element Target element
+ * @param {string} htmlContent New HTML content
+ */
+export function applyMorphdom(element, htmlContent) {
+    const targetElement = /** @type {HTMLElement} */ (element.cloneNode());
+    targetElement.innerHTML = htmlContent;
+    morphdom(element, targetElement, morphdomDetailsOptions);
 }

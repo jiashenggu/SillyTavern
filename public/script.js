@@ -277,7 +277,7 @@ import { clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPro
 import { getSystemMessageByType, initSystemMessages, SAFETY_CHAT, sendSystemMessage, system_message_types, system_messages } from './scripts/system-messages.js';
 import { event_types, eventSource } from './scripts/events.js';
 import { initAccessibility } from './scripts/a11y.js';
-import { applyStreamFadeIn } from './scripts/util/stream-fadein.js';
+import { applyStreamFadeIn, applyMorphdom } from './scripts/util/stream-fadein.js';
 import { initDomHandlers } from './scripts/dom-handlers.js';
 import { SimpleMutex } from './scripts/util/SimpleMutex.js';
 import { AudioPlayer } from './scripts/audio-player.js';
@@ -3598,6 +3598,10 @@ class StreamingProcessor {
             if (this.messageTextDom instanceof HTMLElement) {
                 if (power_user.stream_fade_in) {
                     applyStreamFadeIn(this.messageTextDom, formattedText);
+                } else if (this.messageTextDom.querySelector('details[open]')) {
+                    // Use morphdom (without text segmentation) to preserve open <details>
+                    // and avoid CSS animation re-trigger that causes flicker
+                    applyMorphdom(this.messageTextDom, formattedText);
                 } else {
                     this.messageTextDom.innerHTML = formattedText;
                 }

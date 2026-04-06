@@ -230,7 +230,17 @@ app.get('/login', loginPageMiddleware);
 // Host frontend assets
 const webpackMiddleware = getWebpackServeMiddleware();
 app.use(webpackMiddleware);
-app.use(express.static(path.join(serverDirectory, 'public'), {}));
+app.use(express.static(path.join(serverDirectory, 'public'), {
+    setHeaders: (res, filePath) => {
+        // Fonts and images rarely change - cache aggressively
+        if (/\.(woff2?|ttf|eot|otf|png|jpg|svg|ico)$/.test(filePath)) {
+            res.setHeader('Cache-Control', 'public, max-age=604800'); // 7 days
+        } else {
+            // JS/CSS may change on updates - use conditional caching (ETag/Last-Modified)
+            res.setHeader('Cache-Control', 'no-cache');
+        }
+    },
+}));
 
 // Public API
 app.use('/api/users', usersPublicRouter);

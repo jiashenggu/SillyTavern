@@ -674,66 +674,82 @@ async function firstLoadInit() {
     }
 
     showLoader();
-    registerPromptManagerMigration();
-    initDomHandlers();
-    initStandaloneMode();
-    initLibraryShims();
-    addShowdownPatch(showdown);
-    addDOMPurifyHooks();
-    reloadMarkdownProcessor();
-    applyBrowserFixes();
-    await getClientVersion();
-    await initSecrets();
-    await readSecretState();
-    await initLocales();
-    initChatUtilities();
-    initDefaultSlashCommands();
-    initTextGenModels();
-    initOpenAI();
-    initTextGenSettings();
-    initKoboldSettings();
-    initNovelAISettings();
-    initSystemPrompts();
-    initExtensions();
-    initExtensionSlashCommands();
-    ToolManager.initToolSlashCommands();
-    await initPresetManager();
-    await initSystemMessages();
-    await getSettings();
-    initKeyboard();
-    initDynamicStyles();
-    initTags();
-    initBookmarks();
-    await getUserAvatars(true, user_avatar);
-    await getCharacters();
-    await getBackgrounds();
-    await initTokenizers();
-    initBackgrounds();
-    initAuthorsNote();
-    await initPersonas();
-    await initSlashCommandAutoComplete();
-    initMacroAutoComplete();
-    initWorldInfo();
-    initHorde();
-    initRossMods();
-    initStats();
-    initCfg();
-    initLogprobs();
-    initInputMarkdown();
-    initServerHistory();
-    initSettingsSearch();
-    initBulkEdit();
-    initReasoning();
-    initWelcomeScreen();
-    await initScrapers();
-    initCustomSelectedSamplers();
-    initDataMaid();
-    initItemizedPrompts();
-    initAccessibility();
-    addDebugFunctions();
-    doDailyExtensionUpdatesCheck();
-    await eventSource.emit(event_types.APP_INITIALIZED);
-    await hideLoader();
+
+    // Safety timeout: force hide loader if init takes too long
+    const initTimeout = setTimeout(async () => {
+        console.error('[Init] Initialization timed out after 30s, forcing loader hide');
+        try { await hideLoader(); } catch { /* ignore */ }
+        toastr.warning('Initialization timed out. Some features may not work.', 'Warning', { timeOut: 10000 });
+    }, 30000);
+
+    try {
+        registerPromptManagerMigration();
+        initDomHandlers();
+        initStandaloneMode();
+        initLibraryShims();
+        addShowdownPatch(showdown);
+        addDOMPurifyHooks();
+        reloadMarkdownProcessor();
+        applyBrowserFixes();
+        await getClientVersion();
+        await initSecrets();
+        await readSecretState();
+        await initLocales();
+        initChatUtilities();
+        initDefaultSlashCommands();
+        initTextGenModels();
+        initOpenAI();
+        initTextGenSettings();
+        initKoboldSettings();
+        initNovelAISettings();
+        initSystemPrompts();
+        initExtensions();
+        initExtensionSlashCommands();
+        ToolManager.initToolSlashCommands();
+        await initPresetManager();
+        await initSystemMessages();
+        await getSettings();
+        initKeyboard();
+        initDynamicStyles();
+        initTags();
+        initBookmarks();
+        await getUserAvatars(true, user_avatar);
+        await getCharacters();
+        await getBackgrounds();
+        await initTokenizers();
+        initBackgrounds();
+        initAuthorsNote();
+        await initPersonas();
+        await initSlashCommandAutoComplete();
+        initMacroAutoComplete();
+        initWorldInfo();
+        initHorde();
+        initRossMods();
+        initStats();
+        initCfg();
+        initLogprobs();
+        initInputMarkdown();
+        initServerHistory();
+        initSettingsSearch();
+        initBulkEdit();
+        initReasoning();
+        initWelcomeScreen();
+        await initScrapers();
+        initCustomSelectedSamplers();
+        initDataMaid();
+        initItemizedPrompts();
+        initAccessibility();
+        addDebugFunctions();
+        doDailyExtensionUpdatesCheck();
+        await eventSource.emit(event_types.APP_INITIALIZED);
+    } catch (error) {
+        console.error('[Init] Initialization error:', error);
+        toastr.error('Initialization error: ' + error.message, 'Error', { timeOut: 10000 });
+    } finally {
+        clearTimeout(initTimeout);
+        await hideLoader();
+    }
+
     await fixViewport();
     await eventSource.emit(event_types.APP_READY);
 }
@@ -7866,10 +7882,21 @@ export async function saveSettings(loopCounter = 0) {
     };
 
     try {
+        const jsonString = JSON.stringify(payload);
+        const headers = getRequestHeaders();
+        let body = jsonString;
+
+        // Compress large payloads to reduce upload bandwidth usage
+        if (jsonString.length > 1024 && typeof CompressionStream !== 'undefined') {
+            const stream = new Blob([jsonString]).stream().pipeThrough(new CompressionStream('gzip'));
+            body = await new Response(stream).blob();
+            headers['Content-Encoding'] = 'gzip';
+        }
+
         const result = await fetch('/api/settings/save', {
             method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify(payload),
+            headers: headers,
+            body: body,
             cache: 'no-cache',
         });
 

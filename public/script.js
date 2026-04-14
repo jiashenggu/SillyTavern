@@ -3506,6 +3506,10 @@ class StreamingProcessor {
         this.isFinished = false;
         this.generator = this.nullStreamingGeneration;
         this.abortController = new AbortController();
+        /** @type {{ type: string, data: object, options?: AdditionalRequestOptions } | null} Stored params for stream retry */
+        this.retryParams = null;
+        this.maxStreamRetries = 2;
+        this.streamRetryCount = 0;
         this.firstMessageText = '...';
         this.timeStarted = timeStarted;
         /** @type {number?} */
@@ -3796,6 +3800,34 @@ class StreamingProcessor {
     }
 
     /**
+     * Checks if an error is retryable (network/timeout issues, not user-initiated or API errors).
+     * @param {Error} err The error to check
+     * @returns {boolean} True if the error is retryable
+     */
+    isRetryableError(err) {
+        if (this.isStopped || this.isFinished) return false;
+        if (err.name === 'AbortError') return false;
+        // Heartbeat timeout (our custom error from readWithHeartbeat)
+        if (err.name === 'StreamHeartbeatTimeoutError') return true;
+        // Network errors (fetch failures, connection resets)
+        if (err.name === 'TypeError' && /fetch|network/i.test(err.message)) return true;
+        return false;
+    }
+
+    /**
+     * Refreshes the generator for a retry attempt by creating a new AbortController
+     * and requesting a new stream from the API.
+     * @returns {Promise<void>}
+     */
+    async refreshGeneratorForRetry() {
+        if (!this.retryParams) {
+            throw new Error('No retry params stored — cannot refresh generator');
+        }
+        this.abortController = new AbortController();
+        this.generator = await sendStreamingRequest(this.retryParams.type, this.retryParams.data, this.retryParams.options ?? {});
+    }
+
+    /**
      * @returns {AsyncGenerator<{ text: string, swipes: string[], logprobs: import('./scripts/logprobs.js').TokenLogprobs, toolCalls: any[], state: any }, void, void>}
      */
     async* nullStreamingGeneration() {
@@ -3844,11 +3876,36 @@ class StreamingProcessor {
             const seconds = (timestamps[timestamps.length - 1] - timestamps[0]) / 1000;
             console.warn(`Stream stats: ${timestamps.length} tokens, ${seconds.toFixed(2)} seconds, rate: ${Number(timestamps.length / seconds).toFixed(2)} TPS`);
         } catch (err) {
-            // in the case of a self-inflicted abort, we have already cleaned up
-            if (!this.isFinished) {
-                console.error(err);
-                this.onErrorStreaming();
+            // In the case of a self-inflicted abort, we have already cleaned up
+            if (this.isFinished) {
+                return this.result;
             }
+
+            // Attempt exponential backoff retry for retryable errors
+            if (this.isRetryableError(err) && this.retryParams && this.streamRetryCount < this.maxStreamRetries) {
+                this.streamRetryCount++;
+                const backoffMs = Math.min(1000 * Math.pow(2, this.streamRetryCount - 1), 15000);
+                console.warn(`Stream interrupted (${err.name}), retry ${this.streamRetryCount}/${this.maxStreamRetries} in ${backoffMs}ms`);
+                toastr.info(
+                    `Stream interrupted. Retrying (${this.streamRetryCount}/${this.maxStreamRetries})...`,
+                    'Streaming',
+                    { timeOut: backoffMs + 1000 },
+                );
+                await delay(backoffMs);
+
+                // Refresh generator and re-enter generate()
+                try {
+                    await this.refreshGeneratorForRetry();
+                    return await this.generate();
+                } catch (retryErr) {
+                    console.error('Failed to refresh generator for retry:', retryErr);
+                    this.onErrorStreaming();
+                    return this.result;
+                }
+            }
+
+            console.error(err);
+            this.onErrorStreaming();
             return this.result;
         }
 
@@ -5336,7 +5393,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 streamingProcessor.firstMessageText = '';
             }
 
-            streamingProcessor.generator = await sendStreamingRequest(type, generate_data, { jsonSchema });
+            const streamingRequestOptions = { jsonSchema };
+            streamingProcessor.generator = await sendStreamingRequest(type, generate_data, streamingRequestOptions);
+            streamingProcessor.retryParams = { type, data: generate_data, options: streamingRequestOptions };
 
             hideSwipeButtons();
             let getMessage = await streamingProcessor.generate();

@@ -259,3 +259,104 @@ describe('Streaming Resilience - Partial Content Preservation', () => {
         // In this case the normal onFinishStreaming path handles saving
     });
 });
+
+describe('Streaming Resilience - Exponential Backoff Retry', () => {
+    /**
+     * Minimal mock of StreamingProcessor retry logic for testing.
+     */
+    function createMockProcessor(opts = {}) {
+        return {
+            isStopped: false,
+            isFinished: false,
+            result: opts.result || '',
+            retryParams: 'retryParams' in opts ? opts.retryParams : { type: 'normal', data: {} },
+            maxStreamRetries: opts.maxStreamRetries ?? 2,
+            streamRetryCount: 0,
+            isRetryableError(err) {
+                if (this.isStopped || this.isFinished) return false;
+                if (err.name === 'AbortError') return false;
+                if (err.name === 'StreamHeartbeatTimeoutError') return true;
+                if (err.name === 'TypeError' && /fetch|network/i.test(err.message)) return true;
+                return false;
+            },
+        };
+    }
+
+    test('isRetryableError should return true for StreamHeartbeatTimeoutError', () => {
+        const proc = createMockProcessor();
+        const err = new StreamHeartbeatTimeoutError(90000);
+        expect(proc.isRetryableError(err)).toBe(true);
+    });
+
+    test('isRetryableError should return true for network TypeError', () => {
+        const proc = createMockProcessor();
+        const err = new TypeError('Failed to fetch');
+        expect(proc.isRetryableError(err)).toBe(true);
+    });
+
+    test('isRetryableError should return true for network error message', () => {
+        const proc = createMockProcessor();
+        const err = new TypeError('NetworkError when attempting to fetch resource');
+        expect(proc.isRetryableError(err)).toBe(true);
+    });
+
+    test('isRetryableError should return false for AbortError', () => {
+        const proc = createMockProcessor();
+        const err = new DOMException('The user aborted a request.', 'AbortError');
+        expect(proc.isRetryableError(err)).toBe(false);
+    });
+
+    test('isRetryableError should return false for generic errors', () => {
+        const proc = createMockProcessor();
+        const err = new Error('Some API error');
+        expect(proc.isRetryableError(err)).toBe(false);
+    });
+
+    test('isRetryableError should return false when isStopped (user manually stopped)', () => {
+        const proc = createMockProcessor();
+        proc.isStopped = true;
+        const err = new StreamHeartbeatTimeoutError(90000);
+        expect(proc.isRetryableError(err)).toBe(false);
+    });
+
+    test('isRetryableError should return false when isFinished', () => {
+        const proc = createMockProcessor();
+        proc.isFinished = true;
+        const err = new StreamHeartbeatTimeoutError(90000);
+        expect(proc.isRetryableError(err)).toBe(false);
+    });
+
+    test('retry decision: should retry when error is retryable and under max retries', () => {
+        const proc = createMockProcessor();
+        const err = new StreamHeartbeatTimeoutError(90000);
+        const shouldRetry = proc.isRetryableError(err) && proc.retryParams && proc.streamRetryCount < proc.maxStreamRetries;
+        expect(shouldRetry).toBe(true);
+    });
+
+    test('retry decision: should NOT retry when max retries exceeded', () => {
+        const proc = createMockProcessor();
+        proc.streamRetryCount = 2; // already at max
+        const err = new StreamHeartbeatTimeoutError(90000);
+        const shouldRetry = proc.isRetryableError(err) && proc.retryParams && proc.streamRetryCount < proc.maxStreamRetries;
+        expect(shouldRetry).toBe(false);
+    });
+
+    test('retry decision: should NOT retry when no retryParams', () => {
+        const proc = createMockProcessor({ retryParams: null });
+        const err = new StreamHeartbeatTimeoutError(90000);
+        const shouldRetry = proc.isRetryableError(err) && proc.retryParams && proc.streamRetryCount < proc.maxStreamRetries;
+        expect(shouldRetry).toBeFalsy();
+    });
+
+    test('exponential backoff timing: delays double each attempt', () => {
+        const delays = [1, 2, 3].map(attempt =>
+            Math.min(1000 * Math.pow(2, attempt - 1), 15000),
+        );
+        expect(delays).toEqual([1000, 2000, 4000]);
+    });
+
+    test('exponential backoff timing: caps at 15 seconds', () => {
+        const delay = Math.min(1000 * Math.pow(2, 10), 15000);
+        expect(delay).toBe(15000);
+    });
+});

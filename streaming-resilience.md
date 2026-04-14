@@ -397,12 +397,99 @@ Received: ["word0 ", "word1 ", ..., "word9 "]  ✓
 | 数据完整性 (E2E) | — | 10/10 正确 | E2E 实测 | **无损** |
 | 正常流性能影响 | — | 359ms vs 基线 | E2E 实测 | **无感** |
 
+## 真实 API 测试
+
+> 连接 `https://inference-api.nvidia.com/v1`，模型 `aws/anthropic/bedrock-claude-opus-4-6`
+
+### 测试架构
+
+```
+Test Client ──HTTP──> Express Proxy (forwardFetchResponse) ──HTTPS──> inference-api.nvidia.com
+                          ↑                                                  ↑
+                  configureSocketKeepalive                          真实 Claude Opus 4.6
+                  + AbortController                                 via NVIDIA API
+```
+
+### 真实 API 测试结果 (5/5 passed)
+
+#### 测试 1: 全链路 Streaming
+
+```
+[Real API] Full text: "Hello streaming test 12345"
+[Real API] Chunks: 3, TTFT: 4793ms, Total: 4793ms
+```
+
+- 请求 "Reply with exactly: Hello streaming test 12345"
+- **响应内容完全正确**，经过 Proxy pipe 无损传输
+- TTFT (首 token 延迟): 4793ms（包含网络往返 + API 处理）
+
+#### 测试 2: 心跳不误触发
+
+```
+[Real Heartbeat] Completed: 2 chunks, 3184ms, error: none
+```
+
+- 15 秒心跳超时，真实 API 响应在 ~3s 内完成
+- **零误触发**
+
+#### 测试 3: TCP Keepalive
+
+```
+[Real Keepalive] Socket count: 1, timeout: 6000ms
+```
+
+- Proxy socket 有活跃 timeout（node-fetch 内部从 120s 调整为 6s）
+- keepalive 探测已设置
+
+#### 测试 4: 中途断开保留内容
+
+```
+[Real Partial] Disconnected after 10 chunks (2193ms)
+[Real Partial] Preserved text (120 chars): "The ocean is a vast and mysterious expanse that covers more than 70 percent of E..."
+```
+
+- 请求"写一段关于海洋的段落"，生成中收到 10 个 chunk 后主动断开
+- **120 字符部分内容完整保留**，断开后 Proxy 正确清理
+
+#### 测试 5: 汇总面板 (真实输出)
+
+```
+╔════════════════════════════════════════════════════════════════╗
+║            REAL API E2E RESULTS                               ║
+╠════════════════════════════════════════════════════════════════╣
+║  API Endpoint:    https://inference-api.nvidia.com/v1/chat/com║
+║  Model:           aws/anthropic/bedrock-claude-opus-4-6       ║
+╠════════════════════════════════════════════════════════════════╣
+║  Stream completed:        YES                                 ║
+║  Chunks received:         2                                   ║
+║  Time to first token:     4808ms                              ║
+║  Total time:              4808ms                              ║
+║  Response text:           "test ok...."                       ║
+║  Heartbeat false trigger:  NO                                 ║
+║  TCP Keepalive:            Active (30s/120s)                  ║
+╚════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 ## 局限性说明
 
-1. **未连接真实 LLM API** — E2E 测试使用 Mock LLM 服务器，非 Claude/OpenAI 真实端点
+1. ~~未连接真实 LLM API~~ — **已通过真实 API 验证** (NVIDIA / Claude Opus 4.6)
 2. **未做真实网络中断** — 故障通过 `socket.destroy()` / 停止写入模拟，非 `iptables DROP`
 3. **StreamingProcessor 重试链路未 E2E 测试** — 该类深度依赖浏览器 DOM，只测了判断逻辑
 4. **TCP keepalive 效果** — 验证了参数设置，但真实 NAT 穿透效果需要实际网络环境验证
+
+## 测试统计
+
+```
+单元测试:         28 passed, 28 total    (0.75s)
+集成 benchmark:   10 passed, 10 total   (21.23s)
+E2E Mock 管道:     9 passed,  9 total   (16.24s)
+E2E 真实 API:      5 passed,  5 total   (15.41s)
+项目原有测试:      81 passed, 81 total   (0.59s)
+──────────────────────────────────────────────────
+总计:            133 passed, 133 total
+```
 
 ## 改动文件清单
 
@@ -419,7 +506,8 @@ Received: ["word0 ", "word1 ", ..., "word9 "]  ✓
 | `public/script.js` | 修改 | StreamingProcessor 重试逻辑 + 部分内容保存 |
 | `tests/streaming-resilience.test.js` | 新增 | 28 个单元测试 |
 | `tests/streaming-benchmark.test.js` | 新增 | 10 个集成 benchmark 测试 |
-| `tests/streaming-e2e.test.js` | 新增 | 9 个端到端三层管道测试 |
+| `tests/streaming-e2e.test.js` | 新增 | 9 个端到端 Mock 管道测试 |
+| `tests/streaming-real-api.test.js` | 新增 | 5 个真实 API 测试 |
 
 ## Git 提交记录
 
@@ -429,4 +517,5 @@ c23b408dc feat: add TCP keepalive for faster dead connection detection
 e225d2d23 feat: preserve partial streaming content on connection failure
 ac94ebb7e feat: add exponential backoff auto-retry for streaming failures
 8ed241f69 docs: add streaming resilience benchmark tests and report
+80102c66b test: add 3-layer E2E streaming pipeline tests
 ```

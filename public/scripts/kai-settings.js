@@ -19,7 +19,7 @@ import { autoSelectInstructPreset } from './instruct-mode.js';
 import {
     power_user,
 } from './power-user.js';
-import { getEventSourceStream } from './sse-stream.js';
+import { getEventSourceStream, readWithHeartbeat } from './sse-stream.js';
 import { getSortableDelay, versionCompare } from './utils.js';
 
 export let koboldai_settings;
@@ -244,7 +244,7 @@ export async function generateKoboldWithStreaming(generate_data, signal) {
     return async function* streamData() {
         let text = '';
         while (true) {
-            const { done, value } = await reader.read();
+            const { done, value } = await readWithHeartbeat(reader);
             if (done) return;
 
             const data = JSON.parse(value.data);

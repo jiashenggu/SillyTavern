@@ -386,4 +386,47 @@ export function getEventSourceStream() {
     return new EventSourceStream();
 }
 
+/**
+ * Default streaming heartbeat timeout in milliseconds.
+ * If no data is received within this interval, the stream is considered stale.
+ */
+const DEFAULT_HEARTBEAT_TIMEOUT = 90000;
+
+/**
+ * Error class for stream heartbeat timeouts.
+ */
+export class StreamHeartbeatTimeoutError extends Error {
+    constructor(timeoutMs) {
+        super(`Stream heartbeat timeout: no data received for ${timeoutMs}ms`);
+        this.name = 'StreamHeartbeatTimeoutError';
+        this.timeoutMs = timeoutMs;
+    }
+}
+
+/**
+ * Reads from a ReadableStreamDefaultReader with a heartbeat timeout.
+ * If no data arrives within the timeout, rejects with StreamHeartbeatTimeoutError.
+ *
+ * @param {ReadableStreamDefaultReader} reader The stream reader to read from
+ * @param {number} [timeoutMs] Timeout in milliseconds (default: DEFAULT_HEARTBEAT_TIMEOUT)
+ * @returns {Promise<ReadableStreamReadResult<any>>} The read result
+ * @throws {StreamHeartbeatTimeoutError} If no data is received within the timeout
+ */
+export function readWithHeartbeat(reader, timeoutMs = DEFAULT_HEARTBEAT_TIMEOUT) {
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+            reject(new StreamHeartbeatTimeoutError(timeoutMs));
+        }, timeoutMs);
+    });
+
+    return Promise.race([
+        reader.read().then((result) => {
+            clearTimeout(timeoutId);
+            return result;
+        }),
+        timeoutPromise,
+    ]);
+}
+
 export default EventSourceStream;

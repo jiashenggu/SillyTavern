@@ -4,7 +4,7 @@ import { getTextGenServer, createTextGenGenerationData, setting_names, textgener
 import { extractReasoningFromData } from './reasoning.js';
 import { formatInstructModeChat, formatInstructModePrompt, getInstructStoppingSequences } from './instruct-mode.js';
 import { getStreamingReply, tryParseStreamingError, createGenerationParameters, settingsToUpdate, oai_settings } from './openai.js';
-import EventSourceStream from './sse-stream.js';
+import EventSourceStream, { readWithHeartbeat } from './sse-stream.js';
 
 // #region Type Definitions
 /**
@@ -167,7 +167,7 @@ export class TextCompletionService {
             const swipes = [];
             const state = { reasoning: '' };
             while (true) {
-                const { done, value } = await reader.read();
+                const { done, value } = await readWithHeartbeat(reader);
                 if (done) return;
                 if (value.data === '[DONE]') return;
 
@@ -508,7 +508,7 @@ export class ChatCompletionService {
             const swipes = [];
             const state = { reasoning: '', images: [], signature: '', toolSignatures: {} };
             while (true) {
-                const { done, value } = await reader.read();
+                const { done, value } = await readWithHeartbeat(reader);
                 if (done) return;
                 const rawData = value.data;
                 if (rawData === '[DONE]') return;

@@ -12,7 +12,7 @@ import {
 } from '../script.js';
 import { MAX_CONTEXT_DEFAULT, MAX_RESPONSE_DEFAULT, power_user } from './power-user.js';
 import { getTextTokens, tokenizers } from './tokenizers.js';
-import { getEventSourceStream } from './sse-stream.js';
+import { getEventSourceStream, readWithHeartbeat } from './sse-stream.js';
 import {
     getSortableDelay,
     getStringHash,
@@ -758,7 +758,7 @@ export async function generateNovelWithStreaming(generate_data, signal) {
     return async function* streamData() {
         let text = '';
         while (true) {
-            const { done, value } = await reader.read();
+            const { done, value } = await readWithHeartbeat(reader);
             if (done) return;
 
             const data = JSON.parse(value.data);

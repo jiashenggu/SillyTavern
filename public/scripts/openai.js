@@ -45,7 +45,7 @@ import {
 import { forceCharacterEditorTokenize, getCustomStoppingStrings, persona_description_positions, power_user } from './power-user.js';
 import { SECRET_KEYS, secret_state, writeSecret } from './secrets.js';
 
-import { getEventSourceStream } from './sse-stream.js';
+import { getEventSourceStream, readWithHeartbeat } from './sse-stream.js';
 import {
     clamp,
     createThumbnail,
@@ -3073,7 +3073,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
             const toolCalls = [];
             const state = { reasoning: '', images: [], signature: '', toolSignatures: {} };
             while (true) {
-                const { done, value } = await reader.read();
+                const { done, value } = await readWithHeartbeat(reader);
                 if (done) return;
                 const rawData = value.data;
                 if (rawData === '[DONE]') return;

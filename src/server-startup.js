@@ -2,6 +2,7 @@ import https from 'node:https';
 import http from 'node:http';
 import fs from 'node:fs';
 import { color, urlHostnameToIPv6, getHasIP } from './util.js';
+import { configureSocketKeepalive } from './socket-keepalive.js';
 
 // Express routers
 import { router as userDataRouter } from './users.js';
@@ -283,6 +284,7 @@ export class ServerStartup {
             const server = https.createServer(sslOptions, this.app);
             server.on('error', reject);
             server.on('listening', resolve);
+            server.on('connection', configureSocketKeepalive);
 
             let host = url.hostname;
             if (ipVersion === 6) host = urlHostnameToIPv6(url.hostname);
@@ -306,6 +308,7 @@ export class ServerStartup {
             const server = http.createServer(this.app);
             server.on('error', reject);
             server.on('listening', resolve);
+            server.on('connection', configureSocketKeepalive);
 
             let host = url.hostname;
             if (ipVersion === 6) host = urlHostnameToIPv6(url.hostname);

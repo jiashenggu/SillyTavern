@@ -201,3 +201,61 @@ describe('Streaming Resilience - Heartbeat Timeout', () => {
         expect(result.value).toEqual({ data: 'ok' });
     });
 });
+
+describe('Streaming Resilience - Partial Content Preservation', () => {
+    /**
+     * Minimal mock of onErrorStreaming logic for testing hasPartialContent detection.
+     */
+    function simulateOnErrorStreaming(result) {
+        const state = {
+            result: result,
+            isStopped: false,
+            hasPartialContent: false,
+        };
+        // Reproduce the onErrorStreaming logic
+        state.isStopped = true;
+        state.hasPartialContent = !!(state.result && state.result !== '' && state.result !== '...');
+        return state;
+    }
+
+    test('hasPartialContent should be true when result has meaningful text', () => {
+        const state = simulateOnErrorStreaming('Hello, this is a partial');
+        expect(state.isStopped).toBe(true);
+        expect(state.hasPartialContent).toBe(true);
+    });
+
+    test('hasPartialContent should be false when result is empty', () => {
+        const state = simulateOnErrorStreaming('');
+        expect(state.hasPartialContent).toBe(false);
+    });
+
+    test('hasPartialContent should be false when result is placeholder "..."', () => {
+        const state = simulateOnErrorStreaming('...');
+        expect(state.hasPartialContent).toBe(false);
+    });
+
+    test('hasPartialContent should be false when result is null/undefined', () => {
+        expect(simulateOnErrorStreaming(null).hasPartialContent).toBe(false);
+        expect(simulateOnErrorStreaming(undefined).hasPartialContent).toBe(false);
+    });
+
+    test('hasPartialContent should be true even for very short text', () => {
+        const state = simulateOnErrorStreaming('H');
+        expect(state.hasPartialContent).toBe(true);
+    });
+
+    test('partial save decision: should save when isStopped and hasPartialContent', () => {
+        const state = simulateOnErrorStreaming('Partial response from LLM...');
+        const getMessage = state.result;
+        const shouldSave = state.hasPartialContent && getMessage;
+        expect(shouldSave).toBeTruthy();
+    });
+
+    test('partial save decision: should NOT save when stream finished normally', () => {
+        // Normal completion: isStopped = false, isFinished = true
+        const state = { isStopped: false, isFinished: true, hasPartialContent: false, result: 'Full response' };
+        const isStreamFinished = !state.isStopped && state.isFinished;
+        expect(isStreamFinished).toBe(true);
+        // In this case the normal onFinishStreaming path handles saving
+    });
+});

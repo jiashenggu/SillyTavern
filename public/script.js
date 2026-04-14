@@ -3765,6 +3765,7 @@ class StreamingProcessor {
     onErrorStreaming() {
         this.abortController.abort();
         this.isStopped = true;
+        this.hasPartialContent = !!(this.result && this.result !== '' && this.result !== '...');
 
         this.markUIGenStopped();
 
@@ -5385,6 +5386,22 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
                 streamingProcessor = null;
                 triggerAutoContinue(messageChunk, isImpersonate);
+                return Object.defineProperties(new String(getMessage), {
+                    'messageChunk': { value: messageChunk },
+                    'fromStream': { value: true },
+                });
+            }
+
+            // Stream failed but partial content was received - save it so the user doesn't lose progress
+            if (streamingProcessor?.hasPartialContent && getMessage) {
+                console.warn('Stream interrupted with partial content, saving what was received');
+                toastr.warning(
+                    t`Stream interrupted. Partial response was saved.`,
+                    t`Streaming Error`,
+                    { timeOut: 5000 },
+                );
+                await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
+                streamingProcessor = null;
                 return Object.defineProperties(new String(getMessage), {
                     'messageChunk': { value: messageChunk },
                     'fromStream': { value: true },

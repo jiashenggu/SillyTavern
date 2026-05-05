@@ -25,10 +25,16 @@ class EventSourceStream {
 
             for (const eventChunk of events) {
                 let eventType = '';
+                let hasComment = false;
                 // Split up by single newlines.
                 const lines = eventChunk.split(/\n|\r|\r\n/g);
                 let eventData = '';
                 for (const line of lines) {
+                    if (line.startsWith(':')) {
+                        hasComment = true;
+                        continue;
+                    }
+
                     const lineMatch = /([^:]+)(?:: ?(.*))?/.exec(line);
                     if (lineMatch) {
                         const field = lineMatch[1];
@@ -54,7 +60,12 @@ class EventSourceStream {
 
                 // https://html.spec.whatwg.org/multipage/server-sent-events.html#dispatchMessage
                 // Skip the event if the data buffer is the empty string.
-                if (eventData === '') continue;
+                if (eventData === '') {
+                    if (hasComment) {
+                        controller.enqueue(new MessageEvent('heartbeat', { data: '' }));
+                    }
+                    continue;
+                }
 
                 if (eventData[eventData.length - 1] === '\n') {
                     eventData = eventData.slice(0, -1);
@@ -412,7 +423,7 @@ export class StreamHeartbeatTimeoutError extends Error {
  * @returns {Promise<ReadableStreamReadResult<any>>} The read result
  * @throws {StreamHeartbeatTimeoutError} If no data is received within the timeout
  */
-export function readWithHeartbeat(reader, timeoutMs = DEFAULT_HEARTBEAT_TIMEOUT) {
+async function readOnceWithHeartbeat(reader, timeoutMs) {
     let timeoutId;
     const timeoutPromise = new Promise((_, reject) => {
         timeoutId = setTimeout(() => {
@@ -427,6 +438,16 @@ export function readWithHeartbeat(reader, timeoutMs = DEFAULT_HEARTBEAT_TIMEOUT)
         }),
         timeoutPromise,
     ]);
+}
+
+export async function readWithHeartbeat(reader, timeoutMs = DEFAULT_HEARTBEAT_TIMEOUT) {
+    while (true) {
+        const result = await readOnceWithHeartbeat(reader, timeoutMs);
+        if (!result.done && result.value?.type === 'heartbeat') {
+            continue;
+        }
+        return result;
+    }
 }
 
 export default EventSourceStream;

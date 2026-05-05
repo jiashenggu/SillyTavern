@@ -709,6 +709,8 @@ export function getImages(directoryPath, sortBy = 'name', type = MEDIA_REQUEST_T
 export async function forwardFetchResponse(from, to) {
     let statusCode = from.status;
     let statusText = from.statusText;
+    const contentType = from.headers.get('content-type') || '';
+    const isEventStream = /^text\/event-stream\b/i.test(contentType);
 
     // Avoid sending 401 responses as they reset the client Basic auth.
     // This can produce an interesting artifact as "400 Unauthorized", but it's not out of spec.
@@ -738,7 +740,60 @@ export async function forwardFetchResponse(from, to) {
     }
 
     if (from.body && to.socket) {
+        if (isEventStream) {
+            to.setHeader('Content-Type', contentType || 'text/event-stream; charset=utf-8');
+            to.setHeader('Cache-Control', 'no-cache, no-transform');
+            to.setHeader('Connection', 'keep-alive');
+            to.setHeader('X-Accel-Buffering', 'no');
+            to.flushHeaders?.();
+
+            // Keep Cloudflare/mobile networks from treating a long model think time as an idle response.
+            const keepAlive = setInterval(() => {
+                if (!to.destroyed && !to.writableEnded) {
+                    to.write(': keepalive\n\n');
+                }
+            }, 15000);
+            let streamFinished = false;
+
+            const cleanup = () => clearInterval(keepAlive);
+
+            from.body.on('data', (chunk) => {
+                if (!to.destroyed && !to.writableEnded) {
+                    to.write(chunk);
+                }
+            });
+
+            from.body.on('end', function () {
+                streamFinished = true;
+                cleanup();
+                console.info('Streaming request finished');
+                to.end();
+            });
+
+            from.body.on('error', function (error) {
+                cleanup();
+                console.warn('Streaming request errored:', error);
+                to.end();
+            });
+
+            to.socket.on('close', function () {
+                cleanup();
+                if (!streamFinished) {
+                    console.warn('Streaming client connection closed before upstream finished');
+                }
+                if (from.body instanceof Readable) from.body.destroy(); // Close the remote stream
+                to.end(); // End the Express response
+            });
+
+            return;
+        }
+
         from.body.pipe(to);
+
+        from.body.on('error', function (error) {
+            console.warn('Streaming request errored:', error);
+            to.end();
+        });
 
         to.socket.on('close', function () {
             if (from.body instanceof Readable) from.body.destroy(); // Close the remote stream

@@ -1,5 +1,6 @@
 import { power_user } from '../power-user.js';
-import { debounce, escapeRegex } from '../utils.js';
+import { debounce, debouncedThrottle, escapeRegex } from '../utils.js';
+import { debounce_timeout } from '../constants.js';
 import { AutoCompleteOption } from './AutoCompleteOption.js';
 import { AutoCompleteFuzzyScore } from './AutoCompleteFuzzyScore.js';
 import { BlankAutoCompleteOption } from './BlankAutoCompleteOption.js';
@@ -68,6 +69,7 @@ export class AutoComplete {
     /**@type {function}*/ updatePositionDebounced;
     /**@type {function}*/ updateDetailsPositionDebounced;
     /**@type {function}*/ updateFloatingPositionDebounced;
+    /**@type {function}*/ showFromInputDebounced;
 
     /**@type {(item:AutoCompleteOption)=>any}*/ onSelect;
 
@@ -114,10 +116,11 @@ export class AutoComplete {
         this.updatePositionDebounced = debounce(this.updatePosition.bind(this), 10);
         this.updateDetailsPositionDebounced = debounce(this.updateDetailsPosition.bind(this), 10);
         this.updateFloatingPositionDebounced = debounce(this.updateFloatingPosition.bind(this), 10);
+        this.showFromInputDebounced = debouncedThrottle(() => this.show(true, this.wasForced), debounce_timeout.quick);
 
         textarea.addEventListener('input', () => {
             this.selectionStart = this.textarea.selectionStart;
-            if (this.text != this.textarea.value) this.show(true, this.wasForced);
+            if (this.text != this.textarea.value) this.showFromInputDebounced();
         });
         textarea.addEventListener('keydown', (evt) => this.handleKeyDown(evt));
         textarea.addEventListener('click', () => {

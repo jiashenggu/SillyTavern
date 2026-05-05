@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frontend Debug"
+  short_description: "Debug frontend layout, CSS, DOM, and rendering issues."
+  default_prompt: "Use $frontend-debug to diagnose this frontend UI rendering bug."

@@ -1,7 +1,7 @@
 # Streaming Resilience 优化报告
 
-> 分支: `feat/streaming-resilience`  
-> 日期: 2026-04-14  
+> 分支: `feat/streaming-resilience`
+> 日期: 2026-04-14
 > 测试环境: Linux 6.6.87 (WSL2), Node.js
 
 ## 问题背景

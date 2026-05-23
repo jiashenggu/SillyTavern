@@ -2,6 +2,8 @@
 .git
 .github
 .gitignore
+.agents
+.claude
 
 # --- Docker ---
 /Dockerfile
@@ -32,6 +34,8 @@
 **/.env*
 **/*.pem
 **/certs
+/config
+/config.yaml
 
 # --- Documentation ---
 readme*

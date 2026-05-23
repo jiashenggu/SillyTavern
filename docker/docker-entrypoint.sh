@@ -1,5 +1,64 @@
 #!/bin/sh
 
+link_persistent_dir() {
+    local SOURCE_DIR="$1"
+    local TARGET_DIR="$2"
+
+    mkdir -p "$TARGET_DIR"
+    mkdir -p "$(dirname "$SOURCE_DIR")"
+
+    if [ -L "$SOURCE_DIR" ]; then
+        local CURRENT_TARGET
+        CURRENT_TARGET=$(readlink "$SOURCE_DIR")
+        if [ "$CURRENT_TARGET" = "$TARGET_DIR" ]; then
+            return
+        fi
+        rm "$SOURCE_DIR" || echo "Warning: Could not remove existing symlink $SOURCE_DIR" >&2
+    fi
+
+    if [ -d "$SOURCE_DIR" ]; then
+        if [ -z "$(ls -A "$TARGET_DIR" 2>/dev/null)" ]; then
+            cp -a "$SOURCE_DIR"/. "$TARGET_DIR"/ 2>/dev/null || echo "Warning: Could not seed $TARGET_DIR from $SOURCE_DIR" >&2
+        fi
+        rm -rf "$SOURCE_DIR" || echo "Warning: Could not replace $SOURCE_DIR with a persistent symlink" >&2
+    elif [ -e "$SOURCE_DIR" ]; then
+        rm -rf "$SOURCE_DIR" || echo "Warning: Could not remove $SOURCE_DIR before linking persistent storage" >&2
+    fi
+
+    if [ ! -e "$SOURCE_DIR" ]; then
+        ln -s "$TARGET_DIR" "$SOURCE_DIR" || echo "Warning: Could not link $SOURCE_DIR -> $TARGET_DIR" >&2
+    fi
+}
+
+setup_persistent_storage() {
+    local PERSISTENT_ROOT="${SILLYTAVERN_PERSISTENT_ROOT:-}"
+
+    if [ -z "$PERSISTENT_ROOT" ]; then
+        return
+    fi
+
+    echo "Persistent storage root: $PERSISTENT_ROOT"
+    mkdir -p "$PERSISTENT_ROOT"
+
+    link_persistent_dir "config" "$PERSISTENT_ROOT/config"
+    link_persistent_dir "data" "$PERSISTENT_ROOT/data"
+    link_persistent_dir "plugins" "$PERSISTENT_ROOT/plugins"
+    link_persistent_dir "public/scripts/extensions/third-party" "$PERSISTENT_ROOT/third-party"
+    link_persistent_dir "backups" "$PERSISTENT_ROOT/backups"
+}
+
+has_port_arg() {
+    for arg in "$@"; do
+        case "$arg" in
+            --port|--port=*)
+                return 0
+                ;;
+        esac
+    done
+
+    return 1
+}
+
 # Function to handle startup logic (Config check + init + Start)
 start_sillytavern() {
     local PREFIX="$1"
@@ -14,9 +73,15 @@ start_sillytavern() {
     # Execute init script to auto-populate config.yaml with missing values
     $PREFIX npm run init
 
+    if [ -n "$PORT" ] && ! has_port_arg "$@"; then
+        set -- --port "$PORT" "$@"
+    fi
+
     # Start the server
     exec $PREFIX node server.js --listen "$@"
 }
+
+setup_persistent_storage
 
 # Dirs that MUST be present at this point (e.g for volumeless docker runs).
 # Please update list, if in the future a related perm issue appear.

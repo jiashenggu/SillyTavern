@@ -3478,6 +3478,16 @@ function hideStopButton() {
     }
 }
 
+const MAX_EMPTY_GENERATION_RETRIES = 10;
+
+function isEmptyGenerationOutput(text) {
+    return !String(text ?? '').trim();
+}
+
+function getEmptyGenerationRetryDelay(retryCount) {
+    return Math.min(1000 * retryCount, 5000);
+}
+
 class StreamingProcessor {
     /**
      * Creates a new streaming processor.
@@ -3510,6 +3520,8 @@ class StreamingProcessor {
         this.retryParams = null;
         this.maxStreamRetries = 2;
         this.streamRetryCount = 0;
+        this.maxEmptyGenerationRetries = MAX_EMPTY_GENERATION_RETRIES;
+        this.emptyGenerationRetryCount = 0;
         this.firstMessageText = '...';
         this.timeStarted = timeStarted;
         /** @type {number?} */
@@ -3827,6 +3839,63 @@ class StreamingProcessor {
         this.generator = await sendStreamingRequest(this.retryParams.type, this.retryParams.data, this.retryParams.options ?? {});
     }
 
+    resetForEmptyRetry() {
+        this.result = '';
+        this.swipes = [];
+        this.messageLogprobs = [];
+        this.toolCalls = [];
+        this.images = [];
+        this.reasoningSignature = null;
+        this.timeToFirstToken = null;
+        this.createdAt = new Date();
+        this.reasoningHandler = new ReasoningHandler(this.timeStarted);
+
+        if (this.type === 'continue' && this.promptReasoning.prefixReasoning) {
+            this.reasoningHandler.initContinue(this.promptReasoning);
+        }
+
+        if (this.messageId !== -1 && chat[this.messageId]) {
+            chat[this.messageId].mes = this.firstMessageText;
+            chat[this.messageId].extra = chat[this.messageId].extra || {};
+            chat[this.messageId].extra.reasoning = '';
+            chat[this.messageId].extra.reasoning_duration = null;
+            chat[this.messageId].extra.reasoning_type = null;
+            chat[this.messageId].extra.reasoning_signature = null;
+
+            if (this.messageTextDom instanceof HTMLElement) {
+                this.messageTextDom.textContent = this.firstMessageText;
+            }
+
+            if (this.messageDom instanceof HTMLElement) {
+                updateReasoningUI(this.messageDom, { reset: true });
+            }
+        }
+    }
+
+    async retryEmptyGenerationIfNeeded() {
+        const hasToolCalls = Array.isArray(this.toolCalls) && this.toolCalls.length > 0;
+        const hasNonTextOutput = Array.isArray(this.images) && this.images.length > 0;
+        if (this.isStopped || this.isFinished || this.abortController.signal.aborted || !this.retryParams || hasToolCalls || hasNonTextOutput || !isEmptyGenerationOutput(this.result) || this.emptyGenerationRetryCount >= this.maxEmptyGenerationRetries) {
+            return false;
+        }
+
+        this.emptyGenerationRetryCount++;
+        const backoffMs = getEmptyGenerationRetryDelay(this.emptyGenerationRetryCount);
+        console.warn(`Stream returned empty output, retry ${this.emptyGenerationRetryCount}/${this.maxEmptyGenerationRetries} in ${backoffMs}ms`);
+        toastr.info(
+            `Empty output received. Retrying (${this.emptyGenerationRetryCount}/${this.maxEmptyGenerationRetries})...`,
+            'Generation',
+            { timeOut: backoffMs + 1000 },
+        );
+        await delay(backoffMs);
+        if (this.isStopped || this.isFinished || this.abortController.signal.aborted) {
+            return false;
+        }
+        this.resetForEmptyRetry();
+        await this.refreshGeneratorForRetry();
+        return true;
+    }
+
     /**
      * @returns {AsyncGenerator<{ text: string, swipes: string[], logprobs: import('./scripts/logprobs.js').TokenLogprobs, toolCalls: any[], state: any }, void, void>}
      */
@@ -3873,8 +3942,13 @@ class StreamingProcessor {
                 await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
                 await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
             }
-            const seconds = (timestamps[timestamps.length - 1] - timestamps[0]) / 1000;
-            console.warn(`Stream stats: ${timestamps.length} tokens, ${seconds.toFixed(2)} seconds, rate: ${Number(timestamps.length / seconds).toFixed(2)} TPS`);
+            if (await this.retryEmptyGenerationIfNeeded()) {
+                return await this.generate();
+            }
+            if (timestamps.length > 0) {
+                const seconds = (timestamps[timestamps.length - 1] - timestamps[0]) / 1000;
+                console.warn(`Stream stats: ${timestamps.length} tokens, ${seconds.toFixed(2)} seconds, rate: ${Number(timestamps.length / seconds).toFixed(2)} TPS`);
+            }
         } catch (err) {
             // In the case of a self-inflicted abort, we have already cleaned up
             if (this.isFinished) {
@@ -4128,29 +4202,43 @@ export async function generateRaw({ prompt = '', api = null, instructOverride = 
         [prompt, api, instructOverride, quietToLoud, systemPrompt, responseLength, trimNames, prefill, jsonSchema] = arguments;
     }
 
-    const data = await generateRawData({ prompt, api, instructOverride, quietToLoud, systemPrompt, responseLength, prefill, jsonSchema });
+    for (let emptyGenerationRetryCount = 0; ; emptyGenerationRetryCount++) {
+        const data = await generateRawData({ prompt, api, instructOverride, quietToLoud, systemPrompt, responseLength, prefill, jsonSchema });
 
-    // JSON string (matching the provided schema) will already be extracted.
-    if (jsonSchema) {
-        return data;
+        // JSON string (matching the provided schema) will already be extracted.
+        if (jsonSchema) {
+            return data;
+        }
+
+        // format result, exclude user prompt bias
+        const message = cleanUpMessage({
+            getMessage: extractMessageFromData(data, api),
+            isImpersonate: false,
+            isContinue: false,
+            displayIncompleteSentences: true,
+            includeUserPromptBias: false,
+            trimNames: trimNames,
+            trimWrongNames: trimNames,
+        });
+
+        if (message) {
+            return message;
+        }
+
+        if (emptyGenerationRetryCount >= MAX_EMPTY_GENERATION_RETRIES) {
+            throw new Error('No message generated');
+        }
+
+        const retryNumber = emptyGenerationRetryCount + 1;
+        const backoffMs = getEmptyGenerationRetryDelay(retryNumber);
+        console.warn(`Raw generation returned empty output, retry ${retryNumber}/${MAX_EMPTY_GENERATION_RETRIES} in ${backoffMs}ms`);
+        toastr.info(
+            `Empty output received. Retrying (${retryNumber}/${MAX_EMPTY_GENERATION_RETRIES})...`,
+            'Generation',
+            { timeOut: backoffMs + 1000 },
+        );
+        await delay(backoffMs);
     }
-
-    // format result, exclude user prompt bias
-    const message = cleanUpMessage({
-        getMessage: extractMessageFromData(data, api),
-        isImpersonate: false,
-        isContinue: false,
-        displayIncompleteSentences: true,
-        includeUserPromptBias: false,
-        trimNames: trimNames,
-        trimWrongNames: trimNames,
-    });
-
-    if (!message) {
-        throw new Error('No message generated');
-    }
-
-    return message;
 }
 
 class TempResponseLength {
@@ -5324,6 +5412,29 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         return Promise.resolve();
     }
 
+    let emptyGenerationRetryCount = 0;
+
+    async function retryEmptyGenerationIfNeeded(text, data, { hasNonTextOutput = false } = {}) {
+        const hasToolCalls = canPerformToolCalls && ToolManager.hasToolCalls(data);
+        if (hasToolCalls || hasNonTextOutput || !isEmptyGenerationOutput(text) || emptyGenerationRetryCount >= MAX_EMPTY_GENERATION_RETRIES || abortController?.signal?.aborted) {
+            return undefined;
+        }
+
+        emptyGenerationRetryCount++;
+        const backoffMs = getEmptyGenerationRetryDelay(emptyGenerationRetryCount);
+        console.warn(`Generation returned empty output, retry ${emptyGenerationRetryCount}/${MAX_EMPTY_GENERATION_RETRIES} in ${backoffMs}ms`);
+        toastr.info(
+            `Empty output received. Retrying (${emptyGenerationRetryCount}/${MAX_EMPTY_GENERATION_RETRIES})...`,
+            'Generation',
+            { timeOut: backoffMs + 1000 },
+        );
+        await delay(backoffMs);
+        if (abortController?.signal?.aborted) {
+            return undefined;
+        }
+        return await sendGenerationRequest(type, generate_data, { jsonSchema });
+    }
+
     /**
      * Saves itemized prompt bits and calls streaming or non-streaming generation API.
      * @returns {Promise<void|*|Awaited<*>|String|{fromStream}|string|undefined|Object>}
@@ -5525,6 +5636,19 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (power_user.trim_spaces) {
             reasoning = reasoning.trim();
+        }
+
+        const emptyRetryText = type === 'quiet' && !quietToLoud
+            ? cleanUpMessage({
+                getMessage: getMessage,
+                isImpersonate: isImpersonate,
+                isContinue: isContinue,
+                displayIncompleteSentences: true,
+            })
+            : messageChunk;
+        const retryData = await retryEmptyGenerationIfNeeded(emptyRetryText, data, { hasNonTextOutput: imageUrls.length > 0 });
+        if (retryData !== undefined) {
+            return onSuccess(retryData);
         }
 
         if (isContinue) {

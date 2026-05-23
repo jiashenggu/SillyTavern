@@ -138,6 +138,8 @@ if (corsEnabled) {
     app.use(cors(corsOptions));
 }
 
+app.get('/healthz', (_, response) => response.sendStatus(204));
+
 if (cliArgs.listen && cliArgs.basicAuthMode) {
     app.use(basicAuthMiddleware);
 }

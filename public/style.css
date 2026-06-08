@@ -5648,6 +5648,26 @@ body:not(.movingUI) .drawer-content.maximized {
     }
 }
 
+@media screen and (min-width: 1001px) {
+    body:not(.movingUI) #left-nav-panel.fillLeft {
+        width: 450px;
+        width: min(640px, max(450px, calc((100dvw - var(--sheldWidth) - 2px) / 2)));
+        max-width: calc(100dvw - 24px);
+        top: var(--topBarBlockSize);
+        height: 0;
+        max-height: calc(100vh - var(--topBarBlockSize));
+        max-height: calc(100dvh - var(--topBarBlockSize));
+        border-radius: 0 10px 10px 0;
+        box-shadow: 0 0 10px var(--black70a);
+        z-index: 4000;
+    }
+
+    body:not(.movingUI) #left-nav-panel.fillLeft.openDrawer {
+        height: calc(100vh - var(--topBarBlockSize));
+        height: calc(100dvh - var(--topBarBlockSize));
+    }
+}
+
 /*
 .fillRight #rm_print_characters_block {
     overflow-y: hidden;
